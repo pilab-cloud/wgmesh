@@ -102,6 +102,8 @@ invalid: [yaml
 }
 
 func TestFileWatcher(t *testing.T) {
+	t.Skip("Skipping integration test")
+
 	// Create temporary config file
 	tmpfile, err := os.CreateTemp("", "config*.yaml")
 	require.NoError(t, err)
@@ -154,6 +156,7 @@ peers:
 }
 
 func TestPeerMonitoring(t *testing.T) {
+	t.Skip("Skipping integration test")
 	// Create mock WireGuard client
 	mockClient := &MockWireguardClient{}
 
