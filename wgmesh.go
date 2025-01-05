@@ -1,11 +1,15 @@
 package wgmesh
 
 import (
+	"context"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -14,6 +18,12 @@ import (
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 	"gopkg.in/yaml.v2"
 )
+
+type WireGuardClient interface {
+	io.Closer
+	Device(name string) (*wgtypes.Device, error)
+	ConfigureDevice(name string, config wgtypes.Config) error
+}
 
 type Config struct {
 	NetworkName string `yaml:"network_name"`
@@ -33,58 +43,177 @@ type Peer struct {
 	NAT        bool     `yaml:"nat,omitempty"`
 }
 
+type PeerState string
+
+const (
+	PeerStateUp    PeerState = "up"
+	PeerStateDown  PeerState = "down"
+	PeerStateError PeerState = "error"
+)
+
+type PeerStatus struct {
+	Name      string    `yaml:"name"`
+	State     PeerState `yaml:"status"` // "up", "down", "error"
+	LastSeen  time.Time `yaml:"last_seen,omitempty"`
+	Error     string    `yaml:"error,omitempty"`
+	BytesSent uint64    `yaml:"bytes_sent"`
+	BytesRecv uint64    `yaml:"bytes_recv"`
+}
+
+type MeshState string
+
+const (
+	MeshStateUp      MeshState = "up"
+	MeshStateDown    MeshState = "down"
+	MeshStatePartial MeshState = "partial"
+)
+
+type MeshStatus struct {
+	NetworkName string                `yaml:"network_name"`
+	Status      MeshState             `yaml:"status"` // "up", "partial", "down"
+	Peers       map[string]PeerStatus `yaml:"peers"`
+	LastUpdate  time.Time             `yaml:"last_update"`
+}
+
 type WgMesh struct {
 	Config       *Config
 	YamlFilePath string
+	status       MeshStatus
+	statusMu     sync.RWMutex
+	Client       WireGuardClient
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
 }
 
 func NewWgMesh(yamlPath string) (*WgMesh, error) {
+	client, err := wgctrl.New()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create wireguard client: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
 	m := &WgMesh{
 		YamlFilePath: yamlPath,
+		status: MeshStatus{
+			Peers: make(map[string]PeerStatus),
+		},
+		Client: client,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	config, err := m.LoadConfig(yamlPath)
 	if err != nil {
+		cancel()
+		client.Close()
 		return nil, err
 	}
 	m.Config = config
+	m.status.NetworkName = config.NetworkName
 
 	return m, nil
 }
 
-func (w *WgMesh) Start() {
-	// Start the WireGuard tunnel
-	err := w.StartTunnel()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to start the WireGuard tunnel")
-		return
-	}
-
-	// Start the file watcher
-	w.startFileWatcher()
+// Close gracefully shuts down the WgMesh instance
+func (w *WgMesh) Close() error {
+	w.cancel()  // Signal all goroutines to stop
+	w.wg.Wait() // Wait for all goroutines to finish
+	return w.Client.Close()
 }
 
-func (w *WgMesh) startFileWatcher() {
+func (w *WgMesh) GetStatus() MeshStatus {
+	w.statusMu.RLock()
+	defer w.statusMu.RUnlock()
+	return w.status
+}
+
+func (w *WgMesh) updatePeerState(name string, state PeerState, err error) {
+	w.statusMu.Lock()
+	defer w.statusMu.Unlock()
+
+	peerStatus := w.status.Peers[name]
+	peerStatus.Name = name
+	peerStatus.State = state
+	if err != nil {
+		peerStatus.Error = err.Error()
+	} else {
+		peerStatus.Error = ""
+	}
+	peerStatus.LastSeen = time.Now()
+	w.status.Peers[name] = peerStatus
+
+	// Update overall mesh status
+	allUp := true
+	allDown := true
+	for _, p := range w.status.Peers {
+		if p.State != "up" {
+			allUp = false
+		}
+		if p.State != "down" {
+			allDown = false
+		}
+	}
+
+	if allUp {
+		w.status.Status = "up"
+	} else if allDown {
+		w.status.Status = "down"
+	} else {
+		w.status.Status = "partial"
+	}
+	w.status.LastUpdate = time.Now()
+}
+
+func (w *WgMesh) handlePeerError(peer Peer, err error) {
+	log.Error().
+		Err(err).
+		Str("peer", peer.Name).
+		Msg("Failed to configure peer")
+
+	w.updatePeerState(peer.Name, PeerStateError, err)
+}
+
+func (w *WgMesh) Start() error {
+	// Start the WireGuard tunnel
+	if err := w.StartTunnel(); err != nil {
+		return fmt.Errorf("failed to start WireGuard tunnel: %w", err)
+	}
+
+	// Start the file watcher in a separate goroutine
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		if err := w.startFileWatcher(); err != nil {
+			log.Error().Err(err).Msg("File watcher stopped with error")
+		}
+	}()
+
+	return nil
+}
+
+func (w *WgMesh) startFileWatcher() error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to initialize file watcher")
+		return fmt.Errorf("failed to initialize file watcher: %w", err)
 	}
 	defer watcher.Close()
 
 	// Add the YAML file to the watcher
-	err = watcher.Add(w.YamlFilePath)
-	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to watch YAML file")
+	if err := watcher.Add(w.YamlFilePath); err != nil {
+		return fmt.Errorf("failed to watch YAML file: %w", err)
 	}
 
 	log.Info().Msg("File watcher started for YAML file: " + w.YamlFilePath)
 
-	// Start watching for changes
 	for {
 		select {
+		case <-w.ctx.Done():
+			return nil
 		case event, ok := <-watcher.Events:
 			if !ok {
-				return
+				return nil
 			}
 			if event.Op&fsnotify.Write == fsnotify.Write {
 				log.Info().Msg("Detected YAML file change")
@@ -92,7 +221,7 @@ func (w *WgMesh) startFileWatcher() {
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
-				return
+				return nil
 			}
 			log.Error().Err(err).Msg("Error watching file")
 		}
@@ -154,7 +283,6 @@ func (w *WgMesh) backupConfig() error {
 	return w.WriteCurrentConfig(backupPath)
 }
 
-// WriteCurrentConfig writes the current configuration to a file. Useful for backups.
 func (w *WgMesh) WriteCurrentConfig(path string) error {
 	data, err := yaml.Marshal(w.Config)
 	if err != nil {
@@ -168,32 +296,23 @@ func (w *WgMesh) WriteCurrentConfig(path string) error {
 func (w *WgMesh) addPeer(peer Peer) error {
 	log.Info().Msg("Adding peer: " + peer.Name)
 
-	// Generate a configuration for the new peer
-	peerConfig := w.generatePeerConfig(peer)
-	_ = peerConfig
-
-	// Apply the configuration using wg (WireGuard command-line tool)
-	// args := []string{
-	// 	"set", w.Config.NetworkName,
-	// 	"peer", peer.PublicKey,
-	// 	"allowed-ips", strings.Join(peer.AllowedIPs, ","),
-	// }
-	// if peer.Endpoint != "" {
-	// 	args = append(args, "endpoint", peer.Endpoint)
-	// }
-	// err := w.CommandRunner.Run("wg", args...)
-	// if err != nil {
-	// 	log.Error().Err(err).Msg("Failed to add peer: " + peer.Name)
-	// 	return err
-	// }
-
-	// Optionally bring up the interface for the added peer
-
-	if err := w.StartTunnel(); err != nil {
-		log.Error().Err(err).Msg("Failed to start tunnel for peer: " + peer.Name)
+	peerConfig, err := w.createPeerConfig(peer)
+	if err != nil {
+		w.handlePeerError(peer, err)
 		return err
 	}
 
+	// Configure the WireGuard interface with just this peer
+	cfg := wgtypes.Config{
+		Peers: []wgtypes.PeerConfig{peerConfig},
+	}
+
+	if err := w.Client.ConfigureDevice(w.Config.NetworkName, cfg); err != nil {
+		w.handlePeerError(peer, err)
+		return fmt.Errorf("failed to add peer %s: %w", peer.Name, err)
+	}
+
+	w.updatePeerState(peer.Name, "configuring", nil)
 	log.Info().Msg("Successfully added peer: " + peer.Name)
 	return nil
 }
@@ -221,23 +340,13 @@ func (w *WgMesh) removePeer(peer Peer) error {
 }
 
 func (w *WgMesh) updatePeer(peer Peer) error {
-	log.Info().Msg("Updating peer: " + peer.Name)
-
-	// Remove and re-add the peer to apply updates
-	err := w.removePeer(peer)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to remove peer during update: " + peer.Name)
-		return err
+	// Remove the old peer first
+	if err := w.removePeer(peer); err != nil {
+		log.Warn().Err(err).Msgf("Failed to remove old peer %s before update", peer.Name)
 	}
 
-	err = w.addPeer(peer)
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to re-add peer during update: " + peer.Name)
-		return err
-	}
-
-	log.Info().Msg("Successfully updated peer: " + peer.Name)
-	return nil
+	// Add the peer with new configuration
+	return w.addPeer(peer)
 }
 
 func (w *WgMesh) LoadConfig(path string) (*Config, error) {
@@ -325,85 +434,137 @@ func getChanges(oldPeer, newPeer Peer) string {
 }
 
 func (w *WgMesh) StartTunnel() error {
-	client, err := wgctrl.New()
-	if err != nil {
-		log.Error().Err(err).Msg("Failed to create WireGuard client")
-		return err
-	}
-	defer client.Close()
+	var lastErr error
 
-	// Convert peers to WireGuard peer configurations
-	var peers []wgtypes.PeerConfig
-	for _, peer := range w.Config.Peers {
-		publicKey, err := wgtypes.ParseKey(peer.PublicKey)
-		if err != nil {
-			log.Error().Err(err).Msgf("Invalid public key for peer %s", peer.Name)
-			return err
-		}
-
-		peerConfig := wgtypes.PeerConfig{
-			PublicKey: publicKey,
-			AllowedIPs: func() []net.IPNet {
-				var allowedIPs []net.IPNet
-				for _, ip := range peer.AllowedIPs {
-					_, ipNet, err := net.ParseCIDR(ip)
-					if err != nil {
-						log.Error().Err(err).Msgf("Invalid CIDR for peer %s: %s", peer.Name, ip)
-						continue
-					}
-					allowedIPs = append(allowedIPs, *ipNet)
-				}
-				return allowedIPs
-			}(),
-			Endpoint: func() *net.UDPAddr {
-				if peer.Endpoint != "" {
-					addr, err := net.ResolveUDPAddr("udp", peer.Endpoint)
-					if err != nil {
-						log.Error().Err(err).Msgf("Invalid endpoint for peer %s", peer.Name)
-						return nil
-					}
-					return addr
-				}
-				return nil
-			}(),
-			PersistentKeepaliveInterval: func() *time.Duration {
-				if peer.NAT {
-					interval := time.Duration(25) * time.Second
-					return &interval
-				}
-				return nil
-			}(),
-		}
-		peers = append(peers, peerConfig)
-	}
-
-	// Configure the WireGuard device
+	// Parse private key
 	privateKey, err := wgtypes.ParseKey(w.Config.PrivateKey)
 	if err != nil {
-		log.Error().Err(err).Msg("Invalid private key for the WireGuard device")
-		return err
+		return fmt.Errorf("invalid private key: %w", err)
 	}
 
-	deviceConfig := wgtypes.Config{
+	// Create WireGuard configuration
+	peerConfigs := make([]wgtypes.PeerConfig, 0, len(w.Config.Peers))
+	for _, peer := range w.Config.Peers {
+		peerConfig, err := w.createPeerConfig(peer)
+		if err != nil {
+			w.handlePeerError(peer, err)
+			lastErr = err
+			continue
+		}
+		peerConfigs = append(peerConfigs, peerConfig)
+		w.updatePeerState(peer.Name, "configuring", nil)
+	}
+
+	// Configure the WireGuard interface
+	cfg := wgtypes.Config{
 		PrivateKey: &privateKey,
-		ListenPort: func() *int {
-			if w.Config.ListenPort != 0 {
-				return &w.Config.ListenPort
-			}
-			return nil
-		}(),
-		ReplacePeers: true,
-		Peers:        peers,
+		ListenPort: &w.Config.ListenPort,
+		Peers:      peerConfigs,
 	}
 
-	err = client.ConfigureDevice(w.Config.NetworkName, deviceConfig)
-	if err != nil {
+	// Apply configuration
+	if err := w.Client.ConfigureDevice(w.Config.NetworkName, cfg); err != nil {
 		log.Error().Err(err).Msg("Failed to configure WireGuard device")
-		return err
+		// Mark all peers as error
+		for _, peer := range w.Config.Peers {
+			w.updatePeerState(peer.Name, "error", err)
+		}
+		return fmt.Errorf("failed to configure WireGuard device: %w", err)
 	}
 
-	log.Info().Msgf("WireGuard tunnel %s started successfully", w.Config.NetworkName)
-	return nil
+	// Start monitoring goroutine
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		w.monitorPeers()
+	}()
+
+	// If we had any peer errors but the device is running, return the last error
+	// This allows the mesh to operate in a degraded state
+	return lastErr
+}
+
+func (w *WgMesh) createPeerConfig(peer Peer) (wgtypes.PeerConfig, error) {
+	pubKey, err := wgtypes.ParseKey(peer.PublicKey)
+	if err != nil {
+		return wgtypes.PeerConfig{}, fmt.Errorf("invalid public key for peer %s: %w", peer.Name, err)
+	}
+
+	var endpoint *net.UDPAddr
+	if peer.Endpoint != "" {
+		endpoint, err = net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", peer.Endpoint, peer.Port))
+		if err != nil {
+			return wgtypes.PeerConfig{}, fmt.Errorf("invalid endpoint for peer %s: %w", peer.Name, err)
+		}
+	}
+
+	allowedIPs := make([]net.IPNet, 0, len(peer.AllowedIPs))
+	for _, ip := range peer.AllowedIPs {
+		_, ipNet, err := net.ParseCIDR(ip)
+		if err != nil {
+			return wgtypes.PeerConfig{}, fmt.Errorf("invalid allowed IP for peer %s: %w", peer.Name, err)
+		}
+		allowedIPs = append(allowedIPs, *ipNet)
+	}
+
+	return wgtypes.PeerConfig{
+		PublicKey:         pubKey,
+		Endpoint:          endpoint,
+		AllowedIPs:        allowedIPs,
+		ReplaceAllowedIPs: true,
+	}, nil
+}
+
+func (w *WgMesh) monitorPeers() {
+	defer w.wg.Done()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			device, err := w.Client.Device(w.Config.NetworkName)
+			if err != nil {
+				log.Error().Err(err).Msg("Failed to get device status")
+				continue
+			}
+
+			// Update status for all peers
+			for _, peer := range device.Peers {
+				peerName := w.getPeerNameByKey(peer.PublicKey.String())
+				if peerName == "" {
+					continue
+				}
+
+				w.statusMu.Lock()
+				status := w.status.Peers[peerName]
+				status.BytesRecv = uint64(peer.ReceiveBytes)
+				status.BytesSent = uint64(peer.TransmitBytes)
+
+				if !peer.LastHandshakeTime.IsZero() && time.Since(peer.LastHandshakeTime) < 3*time.Minute {
+					status.State = "up"
+					status.LastSeen = peer.LastHandshakeTime
+				} else {
+					status.State = "down"
+				}
+
+				w.status.Peers[peerName] = status
+				w.statusMu.Unlock()
+			}
+		}
+	}
+}
+
+func (w *WgMesh) getPeerNameByKey(publicKey string) string {
+	for _, peer := range w.Config.Peers {
+		if peer.PublicKey == publicKey {
+			return peer.Name
+		}
+	}
+	return ""
 }
 
 func (w *WgMesh) StopTunnel() error {
@@ -436,11 +597,13 @@ func (w *WgMesh) RestartTunnel() error {
 		log.Error().Err(err).Msg("Failed to stop the WireGuard tunnel")
 		return err
 	}
+
 	err = w.StartTunnel()
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to start the WireGuard tunnel")
 		return err
 	}
+
 	return nil
 }
 
