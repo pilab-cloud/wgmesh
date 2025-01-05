@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+version: 2
+project_name: wgmesh
+release:
+  github:
+    owner: pilab-dev
+    name: wgmesh
+
+builds:
+  - binary: wgmesh
+    goos:
+      - linux
+    goarch:
+      - amd64
+    env:
+      - CGO_ENABLED=0
+    main: ./cmd/wgmesh/wgmesh.go
+    ldflags: "-s -w -X main.version={{ .Version }}"
+
+nfpms:
+  - formats: [rpm]
+    maintainer: "Paal Gyula <gyula@pilab.hu>"
+    description: "Automated WireGuard Mesh Manager"
+    license: "MIT"
+    vendor: "Progressive Innovation LAB"
+    bindir: "/usr/sbin"
+    scripts:
+      postinstall: configs/postinstall
+      preremove: configs/preremove
+    contents:
+      - dst: /etc/wgmesh/wgmesh.sample.yaml
+        src: configs/wgmesh/wgmesh.sample.yaml
+        type: config|noreplace
+      - dst: /usr/lib/systemd/system/wgmesh.service
+        src: configs/wgmesh/wgmesh.service
+    overrides:
+      rpm:
+        dependencies:
+          - "wireguard-tools"
+        file_name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
+          
+
+checksum:
+  name_template: "checksums.txt"
+
+signs:
+  - artifacts: package
+    cmd: gpg
+    args: ["-u", "3ACD8FE8665185C4", "--detach-sign", "--armor", "${artifact}"]
+    output: true
+    signature: "${artifact}.sig"

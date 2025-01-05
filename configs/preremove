@@ -1,0 +1,3 @@
+systemctl stop wgmesh
+systemctl disable wgmesh
+systemctl daemon-reload

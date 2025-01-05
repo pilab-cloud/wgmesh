@@ -1,0 +1,12 @@
+[Unit]
+Description=WireGuard Mesh Network Manager
+After=network.target
+
+[Service]
+ExecStart=/usr/sbin/wgmesh /etc/wgmesh/wgmesh.yaml
+Restart=always
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

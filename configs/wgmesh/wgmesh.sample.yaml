@@ -1,0 +1,21 @@
+network_name: wg0
+listen_port: 51820
+private_key: YOUR_PRIVATE_KEY_HERE
+peers:
+  - name: peer1
+    ip: 10.0.0.2
+    public_key: abc123
+    allowed_ips:
+      - 10.0.0.2/32
+  # - name: peer3
+  #   ip: 10.0.0.2
+  #   public_key: abc123
+  #   allowed_ips:
+  #     - 10.0.0.2/32
+  - name: peer2
+    ip: 10.0.0.3
+    public_key: def456
+    allowed_ips:
+      - 10.0.0.3/32
+    endpoint: "192.168.1.100:51820"
+    nat: true
