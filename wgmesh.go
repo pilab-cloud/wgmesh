@@ -401,10 +401,6 @@ func (w *WgMesh) diffMesh(oldPeers, newPeers []Peer) ([]Peer, []Peer, []Peer) {
 	return addedPeers, removedPeers, updatedPeers
 }
 
-func (w *WgMesh) logChange(message string) {
-	log.Info().Msg(message)
-}
-
 func getChanges(oldPeer, newPeer Peer) string {
 	var changes []string
 
@@ -433,13 +429,36 @@ func getChanges(oldPeer, newPeer Peer) string {
 	return strings.Join(changes, ", ")
 }
 
-func (w *WgMesh) StartTunnel() error {
-	var lastErr error
+func (w *WgMesh) applyConfigurationChanges(addedPeers, removedPeers []Peer, updatedPeers map[string]Peer) error {
+	// Handle removed peers
+	for _, peer := range removedPeers {
+		log.Info().
+			Str("peer", peer.Name).
+			Msg("Removing peer from WireGuard configuration")
+	}
 
-	// Parse private key
-	privateKey, err := wgtypes.ParseKey(w.Config.PrivateKey)
-	if err != nil {
-		return fmt.Errorf("invalid private key: %w", err)
+	// Handle added peers
+	for _, peer := range addedPeers {
+		log.Info().
+			Str("peer", peer.Name).
+			Msg("Adding new peer to WireGuard configuration")
+	}
+
+	// Handle updated peers
+	for name, newPeer := range updatedPeers {
+		// Find the old peer configuration
+		var oldPeer Peer
+		for _, p := range w.Config.Peers {
+			if p.Name == name {
+				oldPeer = p
+				break
+			}
+		}
+		changes := getChanges(oldPeer, newPeer)
+		log.Info().
+			Str("peer", name).
+			Str("changes", changes).
+			Msg("Updating peer configuration")
 	}
 
 	// Create WireGuard configuration
@@ -448,16 +467,20 @@ func (w *WgMesh) StartTunnel() error {
 		peerConfig, err := w.createPeerConfig(peer)
 		if err != nil {
 			w.handlePeerError(peer, err)
-			lastErr = err
 			continue
 		}
 		peerConfigs = append(peerConfigs, peerConfig)
 		w.updatePeerState(peer.Name, "configuring", nil)
 	}
 
+	pk, err := wgtypes.ParseKey(w.Config.PrivateKey)
+	if err != nil {
+		return fmt.Errorf("invalid private key: %w", err)
+	}
+
 	// Configure the WireGuard interface
 	cfg := wgtypes.Config{
-		PrivateKey: &privateKey,
+		PrivateKey: &pk,
 		ListenPort: &w.Config.ListenPort,
 		Peers:      peerConfigs,
 	}
@@ -472,6 +495,15 @@ func (w *WgMesh) StartTunnel() error {
 		return fmt.Errorf("failed to configure WireGuard device: %w", err)
 	}
 
+	return nil
+}
+
+func (w *WgMesh) StartTunnel() error {
+	// Apply initial configuration
+	if err := w.applyConfigurationChanges(w.Config.Peers, nil, nil); err != nil {
+		return fmt.Errorf("failed to apply initial configuration: %w", err)
+	}
+
 	// Start monitoring goroutine
 	w.wg.Add(1)
 	go func() {
@@ -479,9 +511,7 @@ func (w *WgMesh) StartTunnel() error {
 		w.monitorPeers()
 	}()
 
-	// If we had any peer errors but the device is running, return the last error
-	// This allows the mesh to operate in a degraded state
-	return lastErr
+	return nil
 }
 
 func (w *WgMesh) createPeerConfig(peer Peer) (wgtypes.PeerConfig, error) {
@@ -607,7 +637,7 @@ func (w *WgMesh) RestartTunnel() error {
 	return nil
 }
 
-func (w *WgMesh) generatePeerConfig(peer Peer) string {
+func (w *WgMesh) GeneratePeerConfig(peer Peer) string {
 	// Generate the [Peer] section for WireGuard configuration
 	var builder strings.Builder
 	builder.WriteString("[Peer]\n")

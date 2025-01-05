@@ -4,7 +4,7 @@ version: 2
 project_name: wgmesh
 release:
   github:
-    owner: pilab-dev
+    owner: pilab-cloud
     name: wgmesh
 
 builds:
@@ -45,10 +45,8 @@ checksum:
 
 signs:
   - cmd: gpg
-    args: ["--batch", "--pinentry-mode", "loopback", "--passphrase", "${GPG_PASSPHRASE}", "--detach-sign", "--armor", "${artifact}"]
+    args: ["--batch", "--pinentry-mode", "loopback", "--passphrase", "${GPG_PASSPHRASE}", "--detach-sign", "${artifact}"]
     artifacts: package
-    output: true
-    signature: "${artifact}.sig"
     ids:
       - default
     env:

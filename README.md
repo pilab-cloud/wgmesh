@@ -8,261 +8,189 @@
 
 ## 🚀 Overview
 
-**wgmesh** is an intelligent, automated tool designed to streamline the deployment, configuration, and management of a WireGuard mesh network. Built with Go, wgmesh leverages modern technologies like `fsnotify` for real-time configuration monitoring and `wgctrl` for dynamic WireGuard interface management. Whether you're managing a small network or scaling up to a robust infrastructure, wgmesh ensures your mesh network remains consistent, secure, and effortlessly maintainable.
+WireGuard Mesh Manager (`wgmesh`) is a robust tool for managing WireGuard mesh networks. It provides automatic peer configuration, real-time monitoring, and dynamic configuration updates through a YAML-based configuration system.
 
-![wgmesh Logo](wgmesh.png)
+### Key Features
 
-## 📦 Features
+- 🔄 **Dynamic Configuration**: Hot-reload configuration changes without service restart
+- 📊 **Real-time Monitoring**: Track peer status, connection health, and traffic statistics
+- 🛡️ **Graceful Error Handling**: Continues operating in degraded state if some peers fail
+- 🔒 **Secure by Default**: Proper key management and secure configuration handling
+- 📝 **Detailed Logging**: Comprehensive logging of all network changes and events
 
-- **Automated Deployment:** Simplify the setup of your WireGuard mesh with centralized YAML configurations.
-- **Dynamic Configuration:** Real-time monitoring and application of configuration changes without downtime.
-- **Systemd Integration:** Seamlessly manage wgmesh as a systemd service for reliability and ease of use.
-- **Goreleaser Integration:** Streamlined building and signing of RPM packages for smooth distributions.
-- **Comprehensive Logging:** Detailed logs for auditing and troubleshooting.
-- **Extensible Architecture:** Easily extend wgmesh to fit unique networking requirements.
+## 📋 Requirements
 
-## 🛠️ Installation
+- Linux system with WireGuard kernel module
+- WireGuard tools package
+- Proper permissions to configure network interfaces
 
-### Prerequisites
+## 🔧 Installation
 
-- **Go:** Ensure you have Go installed. [Download Go](https://golang.org/dl/)
-- **WireGuard:** Install WireGuard tools on your system. [WireGuard Installation Guide](https://www.wireguard.com/install/)
-
-### Using Pre-built Binaries
+### Using RPM Package (Recommended)
 
 1. **Download the Latest Release:**
-
    Visit the [Releases](https://github.com/pilab-cloud/wgmesh/releases) page and download the appropriate RPM package for your system.
 
 2. **Install the RPM Package:**
-
    ```bash
-   sudo rpm -i wgmesh-<version>-x86_64.rpm
+   sudo rpm -i wgmesh-<version>.rpm
    ```
 
-3. **Enable and Start the Service:**
+### From Source
 
-   ```bash
-   sudo systemctl enable wgmesh
-   sudo systemctl start wgmesh
-   ```
+```bash
+go install github.com/pilab-cloud/wgmesh/cmd/wgmesh@latest
+```
 
-### Building from Source
+## ⚙️ Configuration
 
-1. **Clone the Repository:**
-
-   ```bash
-   git clone https://github.com/pilab-cloud/wgmesh.git
-   cd wgmesh
-   ```
-
-2. **Build the Application:**
-
-   ```bash
-   go build -o wgmesh ./cmd/wgmesh
-   ```
-
-3. **Install the Application:**
-
-   Move the binary to a directory in your `PATH`, such as `/usr/local/bin/`:
-
-   ```bash
-   sudo mv wgmesh /usr/local/bin/
-   ```
-
-4. **Configure Systemd Service:**
-
-   Copy the provided systemd service file:
-
-   ```bash
-   sudo cp configs/pivirt-appliance/wgmesh.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable wgmesh
-   sudo systemctl start wgmesh
-   ```
-
-## 📄 Configuration
-
-wgmesh uses a centralized YAML configuration file to define the mesh network topology and peer details.
-
-### Sample `wgmesh.yaml`
+Create a YAML configuration file at `/etc/wgmesh/wgmesh.yaml`:
 
 ```yaml
 network_name: wg0
 listen_port: 51820
-private_key: YOUR_PRIVATE_KEY_HERE
+private_key: <your-private-key>  # Base64-encoded WireGuard private key
 peers:
   - name: peer1
-    ip: 10.0.0.2
-    public_key: abc123
-    allowed_ips:
-      - 10.0.0.2/32
-  - name: peer2
-    ip: 10.0.0.3
-    public_key: def456
-    allowed_ips:
-      - 10.0.0.3/32
-    endpoint: "192.168.1.100:51820"
+    ip: 10.0.0.1/24
+    public_key: <peer1-public-key>
+    allowed_ips: ["10.0.0.0/24"]
+    endpoint: "peer1.example.com:51820"
+    persistent_keepalive: 25
     nat: true
 ```
 
-### Configuration Fields
+### Configuration Options
 
-- **`network_name`**: Name of the WireGuard network interface.
-- **`listen_port`**: Port WireGuard listens on.
-- **`private_key`**: Your WireGuard private key.
-- **`peers`**: List of peer configurations.
-  - **`name`**: Unique identifier for the peer.
-  - **`ip`**: Internal IP address assigned to the peer.
-  - **`public_key`**: WireGuard public key of the peer.
-  - **`allowed_ips`**: IPs/Subnets the peer is allowed to access.
-  - **`endpoint`**: Public IP and port of the peer for NAT traversal.
-  - **`nat`**: Boolean indicating if the peer is behind NAT.
+- `network_name`: Name of the WireGuard interface
+- `listen_port`: UDP port for WireGuard traffic
+- `private_key`: Base64-encoded WireGuard private key
+- `mtu`: Interface MTU
+- `dns`: DNS servers
+- `table`: Routing table
 
-## 📈 Usage
+#### Peer Options
 
-Once configured, wgmesh automatically manages your WireGuard mesh network based on the YAML file. Any changes to the configuration file are detected and applied in real-time.
+- `name`: Unique identifier for the peer
+- `ip`: IP address for this peer in the mesh
+- `public_key`: Peer's WireGuard public key
+- `allowed_ips`: List of allowed IP ranges
+- `endpoint`: Optional endpoint address (hostname:port)
+- `persistent_keepalive`: Keepalive interval in seconds
+- `nat`: Enable NAT traversal features
 
-### Common Commands
+## 🚀 Usage
 
-- **Start wgmesh Service:**
+### Service Management
 
-  ```bash
-  sudo systemctl start wgmesh
-  ```
-
-- **Stop wgmesh Service:**
-
-  ```bash
-  sudo systemctl stop wgmesh
-  ```
-
-- **Restart wgmesh Service:**
-
-  ```bash
-  sudo systemctl restart wgmesh
-  ```
-
-- **Check Service Status:**
-
-  ```bash
-  sudo systemctl status wgmesh
-  ```
-
-## 🖥️ Systemd Integration
-
-wgmesh is configured to run as a systemd service, ensuring it starts on boot and can be managed using standard systemctl commands.
-
-### Example Systemd Service (`wgmesh.service`)
-
-```ini
-[Unit]
-Description=WireGuard Mesh Network Manager
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/wgmesh /etc/wgmesh/wgmesh.yaml
-Restart=always
-User=root
-Group=root
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### Managing the Service
-
-- **Enable on Boot:**
-
-  ```bash
-  sudo systemctl enable wgmesh
-  ```
-
-- **Disable on Boot:**
-
-  ```bash
-  sudo systemctl disable wgmesh
-  ```
-
-## 🔐 Security
-
-wgmesh leverages robust logging and secure configuration practices to ensure your mesh network remains protected. Always safeguard your private keys and restrict access to configuration files.
-
-## 🛠️ Development
-
-### Setting Up the Development Environment
-
-1. **Clone the Repository:**
-
+1. **Start the Service:**
    ```bash
-   git clone https://github.com/pilab-cloud/wgmesh.git
-   cd wgmesh
+   sudo systemctl start wgmesh
    ```
 
-2. **Install Dependencies:**
-
+2. **Enable Auto-start:**
    ```bash
-   go mod download
+   sudo systemctl enable wgmesh
    ```
 
-3. **Run Tests:**
-
+3. **Check Status:**
    ```bash
-   go test ./...
+   sudo systemctl status wgmesh
    ```
 
-### Running Locally
+### Monitoring
 
-Start wgmesh with your configuration file:
+1. **View Service Logs:**
+   ```bash
+   sudo journalctl -u wgmesh -f
+   ```
+
+2. **Check Peer Status:**
+   ```bash
+   # View WireGuard interface status
+   sudo wg show wg0
+   
+   # View detailed peer statistics
+   sudo wg show wg0 dump
+   ```
+
+### Troubleshooting
+
+Common issues and solutions:
+
+1. **Permission Denied:**
+   ```bash
+   # Ensure proper permissions
+   sudo setcap cap_net_admin=+ep /usr/local/bin/wgmesh
+   ```
+
+2. **Configuration Errors:**
+   ```bash
+   # Validate configuration
+   sudo wgmesh --validate-config
+   ```
+
+3. **Connection Issues:**
+   ```bash
+   # Check firewall rules
+   sudo firewall-cmd --list-ports
+   
+   # Add WireGuard port if needed
+   sudo firewall-cmd --add-port=51820/udp --permanent
+   sudo firewall-cmd --reload
+   ```
+
+## 🔍 Monitoring and Metrics
+
+The service provides real-time monitoring through structured logging:
+
+- **Peer Status:**
+  - Connection state (up/down)
+  - Last handshake time
+  - Transfer statistics
+  - Latency metrics
+
+- **Configuration Changes:**
+  - Peer additions/removals
+  - Configuration updates
+  - Error states
+
+- **Performance Metrics:**
+  - Bandwidth usage
+  - Packet loss
+  - Handshake latency
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+### Development Setup
 
 ```bash
-wgmesh wgmesh.yaml
+# Install development dependencies
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+# Run tests
+go test -v ./...
+
+# Run linter
+golangci-lint run
 ```
-
-### Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. **Fork the Repository**
-2. **Create a Feature Branch**
-
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-
-3. **Commit Your Changes**
-
-   ```bash
-   git commit -m "Add some feature"
-   ```
-
-4. **Push to the Branch**
-
-   ```bash
-   git push origin feature/your-feature-name
-   ```
-
-5. **Open a Pull Request**
 
 ## 📜 License
 
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 📝 Documentation
+## 🔗 Links
 
-Comprehensive documentation is available in the [docs](docs/specs/wireguard-mesh.md) directory.
-
-## 💬 Support
-
-For support, please open an issue on the [GitHub Issues](https://github.com/yourusername/wgmesh/issues) page or contact [gyula@pilab.hu](mailto:gyula@pilab.hu).
-
-## 📄 Changelog
-
-Detailed changes for each release are documented in the [CHANGELOG](CHANGELOG.md).
-
-## 🎉 Acknowledgements
-
-- [WireGuard](https://www.wireguard.com/)
+- [WireGuard Official Site](https://www.wireguard.com/)
+- [Progressive Innovation LAB](https://pilab.hu)
+- [Documentation](https://pilab.hu/docs/wgmesh)
+- [Issue Tracker](https://github.com/pilab-cloud/wgmesh/issues)
 - [GoReleaser](https://goreleaser.com/)
 - [fsnotify](https://github.com/fsnotify/fsnotify)
 - [wgctrl](https://github.com/wgctrl/wgctrl)
@@ -286,3 +214,5 @@ Pioneering the future, together</p>
 
 <p align="center">
 <img src="https://pilab.hu/images/pi-logo-header.svg" alt="PiVirt Logo" width="100"></p>
+
+

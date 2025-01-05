@@ -199,7 +199,7 @@ peers:
 	}, nil)
 
 	// Start monitoring
-	mesh.Start()
+	_ = mesh.Start()
 
 	// Wait for status update
 	time.Sleep(100 * time.Millisecond)

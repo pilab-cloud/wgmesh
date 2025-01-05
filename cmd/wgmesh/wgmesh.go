@@ -38,7 +38,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	go mesh.Start()
+	go func() {
+		err := mesh.Start()
+		if err != nil {
+			log.Fatal().Err(err).Msg("failed to start wgmesh")
+			os.Exit(1)
+		}
+	}()
 
 	// Wait for SIGINT or SIGTERM
 	c := make(chan os.Signal, 1)
