@@ -2,9 +2,9 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Go Version](https://img.shields.io/badge/Go-1.20-blue.svg)
-![Release](https://img.shields.io/github/release/yourusername/wgmesh.svg)
-![Build Status](https://github.com/yourusername/wgmesh/actions/workflows/build.yml/badge.svg)
-![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/wgmesh)
+![Release](https://img.shields.io/github/release/pilab-cloud/wgmesh.svg)
+![Build Status](https://github.com/pilab-cloud/wgmesh/actions/workflows/build.yml/badge.svg)
+![Go Report Card](https://goreportcard.com/badge/github.com/pilab-cloud/wgmesh)
 
 ## 🚀 Overview
 
@@ -32,7 +32,7 @@
 
 1. **Download the Latest Release:**
 
-   Visit the [Releases](https://github.com/yourusername/wgmesh/releases) page and download the appropriate RPM package for your system.
+   Visit the [Releases](https://github.com/pilab-cloud/wgmesh/releases) page and download the appropriate RPM package for your system.
 
 2. **Install the RPM Package:**
 

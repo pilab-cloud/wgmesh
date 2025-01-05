@@ -39,14 +39,17 @@ nfpms:
         dependencies:
           - "wireguard-tools"
         file_name_template: "{{ .ProjectName }}-{{ .Version }}-{{ .Os }}-{{ .Arch }}"
-          
 
 checksum:
   name_template: "checksums.txt"
 
 signs:
-  - artifacts: package
-    cmd: gpg
-    args: ["-u", "3ACD8FE8665185C4", "--detach-sign", "--armor", "${artifact}"]
+  - cmd: gpg
+    args: ["--batch", "--pinentry-mode", "loopback", "--passphrase", "${GPG_PASSPHRASE}", "--detach-sign", "--armor", "${artifact}"]
+    artifacts: package
     output: true
     signature: "${artifact}.sig"
+    ids:
+      - default
+    env:
+      - GPG_PASSPHRASE=${GPG_PASSPHRASE}
